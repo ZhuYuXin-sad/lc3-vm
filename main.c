@@ -2,65 +2,86 @@
 #include <stdint.h>
 #include <stdlib.h>
 
-/* 
- * 1. 模拟内存：LC-3 有 65536 个内存位置，每个位置存储一个 16 位的值
- * 计算机组成原理：相当于一个 128KB 大小的内存条
- */
 #define MEMORY_MAX (1 << 16)
 uint16_t memory[MEMORY_MAX];
 
-/* 
- * 2. 模拟寄存器：
- * 8个通用寄存器(R0-R7)、1个程序计数器(PC)、1个条件标志寄存器(COND)
- */
 enum {
-    R_R0 = 0,
-    R_R1,
-    R_R2,
-    R_R3,
-    R_R4,
-    R_R5,
-    R_R6,
-    R_R7,
-    R_PC,    /* 存放下一条要执行的指令地址 */
-    R_COND,  /* 存放上一条计算结果的状态（正数、负数、零） */
-    R_COUNT
+    R_R0 = 0, R_R1, R_R2, R_R3, R_R4, R_R5, R_R6, R_R7,
+    R_PC, R_COND, R_COUNT
 };
 uint16_t reg[R_COUNT];
 
-/* 
- * 3. 模拟指令操作码（Opcode）：
- * LC-3 CPU 总共只有 16 条基本指令！
- */
 enum {
-    OP_BR = 0, /* 分支跳转（Branch） */
-    OP_ADD,    /* 加法（Add） */
-    OP_LD,     /* 加载数据（Load） */
-    OP_ST,     /* 存储数据（Store） */
-    OP_JSR,    /* 跳转子程序（Jump register） */
-    OP_AND,    /* 按位与（Bitwise and） */
-    OP_LDR,    /* 间接加载（Load register） */
-    OP_STR,    /* 间接存储（Store register） */
-    OP_RTI,    /* 未使用 */
-    OP_NOT,    /* 按位非（Bitwise not） */
-    OP_LDI,    /* 间接寻址加载 */
-    OP_STI,    /* 间接寻址存储 */
-    OP_JMP,    /* 跳转（Jump） */
-    OP_RES,    /* 保留指令 */
-    OP_LEA,    /* 加载有效地址（Load effective address） */
-    OP_TRAP    /* 系统调用陷阱（输入输出） */
+    OP_BR = 0, OP_ADD, OP_LD, OP_ST, OP_JSR, OP_AND, OP_LDR,
+    OP_STR, OP_RTI, OP_NOT, OP_LDI, OP_STI, OP_JMP, OP_RES,
+    OP_LEA, OP_TRAP
+};
+
+enum {
+    FL_POS = 1 << 0, /* P */
+    FL_ZRO = 1 << 1, /* Z */
+    FL_NEG = 1 << 2, /* N */
 };
 
 /* 
- * 4. 条件标志位（Condition Flags）
+ * 辅助函数 1：符号扩展（Sign Extend）
+ * 计组核心：把一个 5 位或 9 位的二进制补码，扩展成 16 位的标准正负整数
  */
-enum {
-    FL_POS = 1 << 0, /* 正数标志 P (001) */
-    FL_ZRO = 1 << 1, /* 零标志 Z   (010) */
-    FL_NEG = 1 << 2, /* 负数标志 N (100) */
-};
+uint16_t sign_extend(uint16_t x, int bit_count) {
+    if ((x >> (bit_count - 1)) & 1) {
+        x |= (0xFFFF << bit_count);
+    }
+    return x;
+}
+
+/* 
+ * 辅助函数 2：更新条件标志位（Condition Flags）
+ * 每次寄存器计算出结果后，CPU 都要记录它是正数、零还是负数
+ */
+void update_flags(uint16_t r) {
+    if (reg[r] == 0) {
+        reg[R_COND] = FL_ZRO;
+    } else if (reg[r] >> 15) { /* 最高位是 1 说明是负数 */
+        reg[R_COND] = FL_NEG;
+    } else {
+        reg[R_COND] = FL_POS;
+    }
+}
 
 int main(int argc, const char* argv[]) {
-    printf("LC-3 硬件模型初始化完成！\n");
+    /* 1. 设置程序起始地址：LC-3 的默认起始位置是 0x3000 */
+    enum { PC_START = 0x3000 };
+    reg[R_PC] = PC_START;
+
+    /* 2. 模拟在内存 0x3000 处塞入一条测试停机指令（模拟 TRAP） */
+    memory[PC_START] = (OP_TRAP << 12); 
+
+    int running = 1;
+    printf("CPU 启动，进入指令执行主循环...\n");
+
+    /* 3. CPU 指令周期大循环（Fetch -> Decode -> Execute） */
+    while (running) {
+        /* 取指（FETCH）：从 PC 指向的内存读指令，读完 PC 自动加 1 */
+        uint16_t instr = memory[reg[R_PC]++];
+
+        /* 译码（DECODE）：每条指令 16 位，前 4 位就是操作码（右移 12 位拿到） */
+        uint16_t op = instr >> 12;
+
+        /* 执行（EXECUTE）：根据操作码分发逻辑 */
+        switch (op) {
+            case OP_ADD:
+                /* 明天实现具体加法 */
+                break;
+            case OP_TRAP:
+                printf("检测到停机指令，CPU 正常关机！\n");
+                running = 0;
+                break;
+            default:
+                printf("未实现的指令码: %d\n", op);
+                running = 0;
+                break;
+        }
+    }
+
     return 0;
 }
