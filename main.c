@@ -40,38 +40,48 @@ void update_flags(uint16_t r) {
     }
 }
 
+/* 
+ * 内存读写接口：
+ * 计组核心：为什么不直接用 memory[address]？
+ * 因为很多外设（如键盘、屏幕）被映射到了特定内存地址，后面做输入输出必须走这个统一接口。
+ */
+void mem_write(uint16_t address, uint16_t val) {
+    memory[address] = val;
+}
+
+uint16_t mem_read(uint16_t address) {
+    return memory[address];
+}
+
 int main(int argc, const char* argv[]) {
     enum { PC_START = 0x3000 };
     reg[R_PC] = PC_START;
 
     /* 
-     * 【测试代码】：我们手动在内存 0x3000 处写一段真正的机器码程序！
-     * 指令 1：ADD R0, R0, #5   (往 R0 加上立即数 5) -> 0x1025
-     * 指令 2：ADD R1, R0, #10  (R1 = R0 + 10 = 15) -> 0x126A
-     * 指令 3：ADD R2, R0, R1   (R2 = R0 + R1 = 20) -> 0x1441
-     * 指令 4：停机指令
+     * 【Day 4 测试程序】：测试内存存取
+     * 1. 0x3000: ADD R0, R0, #12    (先让 R0 = 12)
+     * 2. 0x3001: ST  R0, #2         (把 R0 的值存到当前 PC+2 的内存位置，即 0x3004)
+     * 3. 0x3002: LD  R1, #1         (从当前 PC+1 的内存位置读出来，放进 R1)
+     * 4. 0x3003: TRAP (停机)
+     * 5. 0x3004: [预留存储位置]
      */
-    memory[0x3000] = 0x1025; /* R0 = R0 + 5 */
-    memory[0x3001] = 0x126A; /* R1 = R0 + 10 */
-    memory[0x3002] = 0x1441; /* R2 = R0 + R1 */
-    memory[0x3003] = (OP_TRAP << 12); /* 停机 */
+    memory[0x3000] = 0x102C; /* ADD R0, R0, #12 */
+    memory[0x3001] = 0x3002; /* ST R0, offset=2 -> 存入 0x3004 */
+    memory[0x3002] = 0x2201; /* LD R1, offset=1 -> 从 0x3004 读取 */
+    memory[0x3003] = (OP_TRAP << 12);
 
     int running = 1;
-    printf("CPU 启动，开始执行测试程序...\n");
+    printf("CPU 启动，开始执行内存存取测试...\n");
 
     while (running) {
-        uint16_t instr = memory[reg[R_PC]++];
+        uint16_t instr = mem_read(reg[R_PC]++);
         uint16_t op = instr >> 12;
 
         switch (op) {
             case OP_ADD: {
-                /* 目的寄存器 DR (bits 11-9) */
                 uint16_t r0 = (instr >> 9) & 0x7;
-                /* 第一个源操作数 SR1 (bits 8-6) */
                 uint16_t r1 = (instr >> 6) & 0x7;
-                /* 判断是否是立即数模式 (bit 5) */
                 uint16_t imm_flag = (instr >> 5) & 0x1;
-
                 if (imm_flag) {
                     uint16_t imm5 = sign_extend(instr & 0x1F, 5);
                     reg[r0] = reg[r1] + imm5;
@@ -79,7 +89,6 @@ int main(int argc, const char* argv[]) {
                     uint16_t r2 = instr & 0x7;
                     reg[r0] = reg[r1] + reg[r2];
                 }
-
                 update_flags(r0);
                 break;
             }
@@ -88,7 +97,6 @@ int main(int argc, const char* argv[]) {
                 uint16_t r0 = (instr >> 9) & 0x7;
                 uint16_t r1 = (instr >> 6) & 0x7;
                 uint16_t imm_flag = (instr >> 5) & 0x1;
-
                 if (imm_flag) {
                     uint16_t imm5 = sign_extend(instr & 0x1F, 5);
                     reg[r0] = reg[r1] & imm5;
@@ -96,7 +104,6 @@ int main(int argc, const char* argv[]) {
                     uint16_t r2 = instr & 0x7;
                     reg[r0] = reg[r1] & reg[r2];
                 }
-
                 update_flags(r0);
                 break;
             }
@@ -104,17 +111,72 @@ int main(int argc, const char* argv[]) {
             case OP_NOT: {
                 uint16_t r0 = (instr >> 9) & 0x7;
                 uint16_t r1 = (instr >> 6) & 0x7;
+                reg[r0] = ~reg[r1];
+                update_flags(r0);
+                break;
+            }
 
-                reg[r0] = ~reg[r1]; /* 按位取反 */
+            /* --- 今天新增：内存访问指令 --- */
+
+            case OP_LD: { /* 相对加载：Load (PC-relative) */
+                uint16_t r0 = (instr >> 9) & 0x7;
+                uint16_t pc_offset = sign_extend(instr & 0x1FF, 9);
+                reg[r0] = mem_read(reg[R_PC] + pc_offset);
+                update_flags(r0);
+                break;
+            }
+
+            case OP_ST: { /* 相对存储：Store (PC-relative) */
+                uint16_t r0 = (instr >> 9) & 0x7;
+                uint16_t pc_offset = sign_extend(instr & 0x1FF, 9);
+                mem_write(reg[R_PC] + pc_offset, reg[r0]);
+                break;
+            }
+
+            case OP_LDI: { /* 间接加载：Load Indirect（二级指针） */
+                uint16_t r0 = (instr >> 9) & 0x7;
+                uint16_t pc_offset = sign_extend(instr & 0x1FF, 9);
+                reg[r0] = mem_read(mem_read(reg[R_PC] + pc_offset));
+                update_flags(r0);
+                break;
+            }
+
+            case OP_STI: { /* 间接存储：Store Indirect */
+                uint16_t r0 = (instr >> 9) & 0x7;
+                uint16_t pc_offset = sign_extend(instr & 0x1FF, 9);
+                mem_write(mem_read(reg[R_PC] + pc_offset), reg[r0]);
+                break;
+            }
+
+            case OP_LDR: { /* 基址偏移加载：Load Base+Offset (类似于 struct/数组) */
+                uint16_t r0 = (instr >> 9) & 0x7;
+                uint16_t r1 = (instr >> 6) & 0x7;
+                uint16_t offset = sign_extend(instr & 0x3F, 6);
+                reg[r0] = mem_read(reg[r1] + offset);
+                update_flags(r0);
+                break;
+            }
+
+            case OP_STR: { /* 基址偏移存储：Store Base+Offset */
+                uint16_t r0 = (instr >> 9) & 0x7;
+                uint16_t r1 = (instr >> 6) & 0x7;
+                uint16_t offset = sign_extend(instr & 0x3F, 6);
+                mem_write(reg[r1] + offset, reg[r0]);
+                break;
+            }
+
+            case OP_LEA: { /* 加载有效地址：Load Effective Address (C 语言的 & 取地址) */
+                uint16_t r0 = (instr >> 9) & 0x7;
+                uint16_t pc_offset = sign_extend(instr & 0x1FF, 9);
+                reg[r0] = reg[R_PC] + pc_offset;
                 update_flags(r0);
                 break;
             }
 
             case OP_TRAP:
-                printf("\n--- 计算完成！查看 CPU 寄存器状态 ---\n");
-                printf("R0 寄存器值: %d (预期: 5)\n", reg[R_R0]);
-                printf("R1 寄存器值: %d (预期: 15)\n", reg[R_R1]);
-                printf("R2 寄存器值: %d (预期: 20)\n", reg[R_R2]);
+                printf("\n--- 测试完成！查看内存与寄存器状态 ---\n");
+                printf("内存 0x3004 处的数据: %d (通过 ST 存入，预期: 12)\n", memory[0x3004]);
+                printf("R1 寄存器的读取结果: %d (通过 LD 读出，预期: 12)\n", reg[R_R1]);
                 running = 0;
                 break;
 
