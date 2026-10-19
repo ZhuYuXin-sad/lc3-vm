@@ -18,15 +18,11 @@ enum {
 };
 
 enum {
-    FL_POS = 1 << 0, /* P */
-    FL_ZRO = 1 << 1, /* Z */
-    FL_NEG = 1 << 2, /* N */
+    FL_POS = 1 << 0,
+    FL_ZRO = 1 << 1,
+    FL_NEG = 1 << 2,
 };
 
-/* 
- * 辅助函数 1：符号扩展（Sign Extend）
- * 计组核心：把一个 5 位或 9 位的二进制补码，扩展成 16 位的标准正负整数
- */
 uint16_t sign_extend(uint16_t x, int bit_count) {
     if ((x >> (bit_count - 1)) & 1) {
         x |= (0xFFFF << bit_count);
@@ -34,14 +30,10 @@ uint16_t sign_extend(uint16_t x, int bit_count) {
     return x;
 }
 
-/* 
- * 辅助函数 2：更新条件标志位（Condition Flags）
- * 每次寄存器计算出结果后，CPU 都要记录它是正数、零还是负数
- */
 void update_flags(uint16_t r) {
     if (reg[r] == 0) {
         reg[R_COND] = FL_ZRO;
-    } else if (reg[r] >> 15) { /* 最高位是 1 说明是负数 */
+    } else if (reg[r] >> 15) {
         reg[R_COND] = FL_NEG;
     } else {
         reg[R_COND] = FL_POS;
@@ -49,33 +41,83 @@ void update_flags(uint16_t r) {
 }
 
 int main(int argc, const char* argv[]) {
-    /* 1. 设置程序起始地址：LC-3 的默认起始位置是 0x3000 */
     enum { PC_START = 0x3000 };
     reg[R_PC] = PC_START;
 
-    /* 2. 模拟在内存 0x3000 处塞入一条测试停机指令（模拟 TRAP） */
-    memory[PC_START] = (OP_TRAP << 12); 
+    /* 
+     * 【测试代码】：我们手动在内存 0x3000 处写一段真正的机器码程序！
+     * 指令 1：ADD R0, R0, #5   (往 R0 加上立即数 5) -> 0x1025
+     * 指令 2：ADD R1, R0, #10  (R1 = R0 + 10 = 15) -> 0x126A
+     * 指令 3：ADD R2, R0, R1   (R2 = R0 + R1 = 20) -> 0x1441
+     * 指令 4：停机指令
+     */
+    memory[0x3000] = 0x1025; /* R0 = R0 + 5 */
+    memory[0x3001] = 0x126A; /* R1 = R0 + 10 */
+    memory[0x3002] = 0x1441; /* R2 = R0 + R1 */
+    memory[0x3003] = (OP_TRAP << 12); /* 停机 */
 
     int running = 1;
-    printf("CPU 启动，进入指令执行主循环...\n");
+    printf("CPU 启动，开始执行测试程序...\n");
 
-    /* 3. CPU 指令周期大循环（Fetch -> Decode -> Execute） */
     while (running) {
-        /* 取指（FETCH）：从 PC 指向的内存读指令，读完 PC 自动加 1 */
         uint16_t instr = memory[reg[R_PC]++];
-
-        /* 译码（DECODE）：每条指令 16 位，前 4 位就是操作码（右移 12 位拿到） */
         uint16_t op = instr >> 12;
 
-        /* 执行（EXECUTE）：根据操作码分发逻辑 */
         switch (op) {
-            case OP_ADD:
-                /* 明天实现具体加法 */
+            case OP_ADD: {
+                /* 目的寄存器 DR (bits 11-9) */
+                uint16_t r0 = (instr >> 9) & 0x7;
+                /* 第一个源操作数 SR1 (bits 8-6) */
+                uint16_t r1 = (instr >> 6) & 0x7;
+                /* 判断是否是立即数模式 (bit 5) */
+                uint16_t imm_flag = (instr >> 5) & 0x1;
+
+                if (imm_flag) {
+                    uint16_t imm5 = sign_extend(instr & 0x1F, 5);
+                    reg[r0] = reg[r1] + imm5;
+                } else {
+                    uint16_t r2 = instr & 0x7;
+                    reg[r0] = reg[r1] + reg[r2];
+                }
+
+                update_flags(r0);
                 break;
+            }
+
+            case OP_AND: {
+                uint16_t r0 = (instr >> 9) & 0x7;
+                uint16_t r1 = (instr >> 6) & 0x7;
+                uint16_t imm_flag = (instr >> 5) & 0x1;
+
+                if (imm_flag) {
+                    uint16_t imm5 = sign_extend(instr & 0x1F, 5);
+                    reg[r0] = reg[r1] & imm5;
+                } else {
+                    uint16_t r2 = instr & 0x7;
+                    reg[r0] = reg[r1] & reg[r2];
+                }
+
+                update_flags(r0);
+                break;
+            }
+
+            case OP_NOT: {
+                uint16_t r0 = (instr >> 9) & 0x7;
+                uint16_t r1 = (instr >> 6) & 0x7;
+
+                reg[r0] = ~reg[r1]; /* 按位取反 */
+                update_flags(r0);
+                break;
+            }
+
             case OP_TRAP:
-                printf("检测到停机指令，CPU 正常关机！\n");
+                printf("\n--- 计算完成！查看 CPU 寄存器状态 ---\n");
+                printf("R0 寄存器值: %d (预期: 5)\n", reg[R_R0]);
+                printf("R1 寄存器值: %d (预期: 15)\n", reg[R_R1]);
+                printf("R2 寄存器值: %d (预期: 20)\n", reg[R_R2]);
                 running = 0;
                 break;
+
             default:
                 printf("未实现的指令码: %d\n", op);
                 running = 0;
